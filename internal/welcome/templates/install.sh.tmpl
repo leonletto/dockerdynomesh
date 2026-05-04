@@ -1,0 +1,41 @@
+#!/bin/sh
+# dockerdynomesh root CA installer for {{.MachineName}}
+# Verifies the downloaded root signs the live TLS endpoint before installing.
+set -eu
+
+SETUP_HOST="{{.SetupHost}}"
+TLS_HOST="{{.TailnetHost}}"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+echo "==> Downloading root cert from http://$SETUP_HOST/root.crt"
+curl -fsSL "http://$SETUP_HOST/root.crt" -o "$TMP/root.crt"
+
+echo "==> Verifying root signs the live cert on https://$TLS_HOST"
+if ! echo | openssl s_client -connect "$TLS_HOST:443" -servername "$TLS_HOST" \
+        -CAfile "$TMP/root.crt" -verify_return_error >/dev/null 2>&1; then
+  echo "FAILED: downloaded root does not verify the live TLS chain on $TLS_HOST." >&2
+  echo "This may indicate tampering or a stale cert. Aborting install." >&2
+  exit 1
+fi
+echo "    ✓ Verified: chain trusts the downloaded root."
+
+case "$(uname -s)" in
+  Darwin)
+    echo "==> Installing into macOS System keychain (requires sudo)"
+    sudo security add-trusted-cert -d -r trustRoot \
+         -k /Library/Keychains/System.keychain "$TMP/root.crt"
+    ;;
+  Linux)
+    echo "==> Installing into /usr/local/share/ca-certificates (requires sudo)"
+    sudo cp "$TMP/root.crt" "/usr/local/share/ca-certificates/dockerdynomesh-{{.MachineName}}.crt"
+    sudo update-ca-certificates
+    ;;
+  *)
+    echo "Unsupported OS: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+
+SUBJECT=$(openssl x509 -in "$TMP/root.crt" -noout -subject | sed 's/^subject= *//')
+echo "✓ Trust established for: $SUBJECT"

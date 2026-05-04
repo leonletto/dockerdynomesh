@@ -1,0 +1,51 @@
+# Binaries
+/bin/
+*.exe
+*.test
+/certgen
+/discoverer
+/welcome
+# Re-include the Dockerfile context directories — the entries above
+# target locally-built binaries with the same names at the repo root.
+!/certgen/
+!/discoverer/
+!/welcome/
+
+# Go build cache and test artifacts
+*.out
+coverage.txt
+
+# Local env
+.env
+*.local
+
+# Generated certs and dynamic config (mounted volumes)
+/traefik/dynamic/auto.yml
+/traefik/dynamic/auto.yml.tmp
+# bootstrap.sh writes this from per-machine values (MACHINE_NAME, TAILNET_DOMAIN).
+/traefik/dynamic/setup.yml
+# bootstrap.sh writes these too.
+/docker-compose.override.yml
+/root-ca.pem
+/dnsmasq.conf
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Claude / agent local state
+.claude
+CLAUDE.md
+AGENTS.md
+
+# Local-only planning artifacts
+dev-docs/
+.thrum/

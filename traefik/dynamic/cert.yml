@@ -1,0 +1,12 @@
+# Registers the certgen-issued wildcard cert as Traefik's default cert.
+# Routers in auto.yml emit `tls: {}`; without a default cert, Traefik
+# would fall back to its self-signed `TRAEFIK DEFAULT CERT`.
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /shared/certs/wildcard.crt
+        keyFile: /shared/certs/wildcard.key
+  certificates:
+    - certFile: /shared/certs/wildcard.crt
+      keyFile: /shared/certs/wildcard.key

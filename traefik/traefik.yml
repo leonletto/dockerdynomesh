@@ -1,0 +1,30 @@
+# Traefik static config for dockerdynomesh.
+# Dynamic routers/services come from the `file` provider, written by
+# the discoverer. cert.yml in the same directory registers the
+# certgen-issued wildcard cert as the default.
+#
+# No entrypoint-level HTTP→HTTPS redirect: port 80 is intentionally
+# usable for the setup.<machine>.<tailnet>.ts.net welcome page (HTTP
+# only — that's where users go before they trust our root CA). Service
+# routers attach to entrypoint `websecure` only; the setup router (in
+# /shared/dynamic/setup.yml, written by bootstrap.sh) attaches to
+# entrypoint `web` only. Port 80 returns 404 for any hostname that
+# isn't the setup hostname, which is correct.
+
+api:
+  dashboard: false
+  insecure: false
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  file:
+    directory: /shared/dynamic
+    watch: true
+
+log:
+  level: INFO

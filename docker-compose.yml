@@ -1,0 +1,165 @@
+name: dockerdynomesh
+
+networks:
+  dynomesh-net:
+    name: dynomesh-net
+    external: true
+
+volumes:
+  certs:
+  run:
+  ca:
+
+services:
+  certgen:
+    build:
+      context: .
+      dockerfile: certgen/Dockerfile
+    environment:
+      # mkcert reads CAROOT from env. Reissuer inherits parent env when
+      # invoking mkcert (no explicit cmd.Env), so without this var the
+      # subprocess would default to ~/.local/share/mkcert and re-issue
+      # certs against a different root than InstallCA created.
+      CAROOT: /shared/ca
+    command:
+      - "-cert=/shared/certs/wildcard.crt"
+      - "-key=/shared/certs/wildcard.key"
+      - "-socket=/shared/run/certgen.sock"
+      - "-caroot=/shared/ca"
+    volumes:
+      - certs:/shared/certs
+      - run:/shared/run
+      - ca:/shared/ca
+    networks: [dynomesh-net]
+    healthcheck:
+      # Healthy once certgen is accepting reissue requests on its Unix
+      # socket. We deliberately do NOT test for the wildcard cert file:
+      # certgen is reactive (it issues the wildcard in response to a
+      # discoverer reissue request), and discoverer's initial reconcile
+      # is one-shot, so a cert-existence check would deadlock cold
+      # boots where certgen's socket isn't ready before discoverer's
+      # first attempt. Socket existence at least gates traefik until
+      # the reissue path is reachable.
+      # Follow-up bead tracks making discoverer retry initial reconcile
+      # so a cert-existence healthcheck would be deadlock-free.
+      test: ["CMD", "test", "-S", "/shared/run/certgen.sock"]
+      interval: 5s
+      timeout: 2s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # dockerdynomesh-ggu: docker-socket-proxy sidecar
+  # Binding /var/run/docker.sock directly into the discoverer and running as
+  # root gives a compromised discoverer full Docker API access — trivial host
+  # root escalation. This sidecar exposes only the read-only
+  # EVENTS/CONTAINERS/NETWORKS/INFO endpoints over a private TCP socket on
+  # dynomesh-net. The discoverer connects via DOCKER_HOST and runs as nonroot;
+  # write endpoints (exec, run, build, etc.) are denied by default.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    container_name: dynomesh-socket-proxy
+    environment:
+      EVENTS: 1
+      CONTAINERS: 1
+      NETWORKS: 1
+      INFO: 1
+      # All other endpoints (POST, exec, run, volumes, build, etc.) deny by default.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [dynomesh-net]
+    restart: unless-stopped
+    # No host port — reachable only on dynomesh-net at tcp://socket-proxy:2375.
+
+  discoverer:
+    build:
+      context: .
+      dockerfile: discoverer/Dockerfile
+    environment:
+      SUFFIX: ${SUFFIX:-docker.localhost}
+      MACHINE_NAME: ${MACHINE_NAME:-}
+      TAILNET_DOMAIN: ${TAILNET_DOMAIN:-}
+      TAKEOVER_SUFFIXES: ${TAKEOVER_SUFFIXES:-}
+      DOCKER_HOST: tcp://socket-proxy:2375
+    command:
+      - "-out=/shared/dynamic/auto.yml"
+      - "-certgen=/shared/run/certgen.sock"
+    volumes:
+      - ./traefik/dynamic:/shared/dynamic
+      - run:/shared/run
+    networks: [dynomesh-net]
+    depends_on:
+      certgen:
+        # service_started, not service_healthy: certgen's healthcheck
+        # is socket-existence, which fires before the first reissue —
+        # but discoverer's initial reconcile runs once and could race
+        # the socket. service_healthy on certgen alone wouldn't help;
+        # the proper fix is the bounded-retry loop tracked in
+        # dockerdynomesh-5x8. discoverer logs and proceeds; events
+        # drive subsequent reissues correctly.
+        condition: service_started
+      socket-proxy:
+        condition: service_started
+    restart: unless-stopped
+
+  traefik:
+    image: traefik:v3.1.7
+    command:
+      - "--configFile=/etc/traefik/traefik.yml"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/shared/dynamic:ro
+      - certs:/shared/certs:ro
+    ports:
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
+      # Tailscale-bound entries are appended by bootstrap.sh via a
+      # generated docker-compose.override.yml so the checked-in
+      # compose file works without Tailscale.
+    networks: [dynomesh-net]
+    depends_on:
+      certgen:
+        condition: service_healthy
+      discoverer:
+        condition: service_started
+    restart: unless-stopped
+
+  welcome:
+    build:
+      context: .
+      dockerfile: welcome/Dockerfile
+    environment:
+      SUFFIX: ${SUFFIX:-docker.localhost}
+      MACHINE_NAME: ${MACHINE_NAME:-}
+      TAILNET_DOMAIN: ${TAILNET_DOMAIN:-}
+    command:
+      - "-listen=0.0.0.0:80"
+    volumes:
+      - ca:/shared/ca:ro
+    networks: [dynomesh-net]
+    # No host-side ports — Traefik handles routing. bootstrap.sh writes
+    # /shared/dynamic/setup.yml with a Host(`setup.<machine>.<tailnet>`)
+    # router that proxies HTTP traffic from Traefik's :80 entrypoint to
+    # this container.
+    restart: unless-stopped
+
+  # Optional dnsmasq sidecar — only starts under the `takeover` profile,
+  # which bootstrap.sh activates when TAKEOVER_SUFFIXES is non-empty.
+  # Answers queries for *.<takeover-suffix> with 127.0.0.1 so macOS
+  # /etc/resolver/<suffix> entries can route lookups here.
+  #
+  # Fix dockerdynomesh-atn: the dockurr/dnsmasq entrypoint discards all CLI
+  # args and execs `dnsmasq --conf-file=/etc/dnsmasq.custom`. The one useful
+  # branch: if /etc/dnsmasq.conf exists, it uses that instead. bootstrap.sh
+  # generates ./dnsmasq.conf with the correct address=/<suffix>/127.0.0.1
+  # lines; we mount it read-only at that path so the entrypoint picks it up.
+  dnsmasq:
+    profiles: ["takeover"]
+    image: dockurr/dnsmasq:latest
+    container_name: dynomesh-dnsmasq
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${TAKEOVER_DNS_PORT:-5300}:53/udp"
+      - "127.0.0.1:${TAKEOVER_DNS_PORT:-5300}:53/tcp"
+    volumes:
+      - ./dnsmasq.conf:/etc/dnsmasq.conf:ro

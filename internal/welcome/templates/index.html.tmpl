@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>dockerdynomesh — {{.MachineName}}</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    code, pre { background: #f4f4f4; padding: 0.2em 0.4em; border-radius: 3px; }
+    pre { padding: 1em; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>dockerdynomesh on {{.MachineName}}</h1>
+  <p>This machine runs <a href="https://github.com/leonletto/dockerdynomesh">dockerdynomesh</a>. Containers here are reachable at:</p>
+  <ul>
+    <li><code>https://&lt;service&gt;.&lt;project&gt;.{{.Suffix}}/</code> &mdash; from this machine</li>
+    {{- if .TailnetHost}}
+    <li><code>https://&lt;service&gt;.&lt;project&gt;.{{.TailnetHost}}/</code> &mdash; from the tailnet</li>
+    {{- end}}
+  </ul>
+  <h2>Trust this machine's CA</h2>
+  <p>If your browser shows a cert warning, that's expected — you haven't trusted this CA yet. That's what the next step fixes.</p>
+  <p>One-liner (verifies the cert against the live TLS endpoint before installing):</p>
+  <pre>curl -sSL http://{{.SetupHost}}/install.sh | bash</pre>
+  <p>Or do it manually:</p>
+  <pre>
+# 1. Download
+curl -O http://{{.SetupHost}}/root.crt
+
+# 2. Verify against the live TLS endpoint (any service hostname works;
+#    we use a known-good name on this machine)
+echo | openssl s_client -connect {{.TailnetHost}}:443 \
+       -CAfile root.crt -verify_return_error 2&gt;&amp;1 | grep "Verify return code"
+
+# 3. Install (macOS)
+sudo security add-trusted-cert -d -r trustRoot \
+     -k /Library/Keychains/System.keychain root.crt
+
+# 3. Install (Ubuntu)
+sudo cp root.crt /usr/local/share/ca-certificates/dockerdynomesh-{{.MachineName}}.crt
+sudo update-ca-certificates
+</pre>
+</body>
+</html>
