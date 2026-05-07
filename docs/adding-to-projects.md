@@ -109,3 +109,108 @@ more detail.
 If a container already has `traefik.*` labels (it's managed by Traefik's
 docker provider directly), discoverer skips it. The auto-generated router
 and the docker-provider router would conflict. Pick one or the other.
+
+## Reusing a cloud-style compose
+
+If your project already has a `docker-compose.yml` written for a cloud
+Traefik deploy (label-driven, with `Host()` rules, entrypoints `web` /
+`websecure`, TLS options, standard middlewares), you can run the same
+file locally under dockerdynomesh with only `.env` swaps.
+
+### How it works
+
+dockerdynomesh runs Traefik with **two providers** at once:
+
+- **File provider** — owns the discoverer-generated routes and the
+  shipped `standard-middlewares.yml` / `standard-tls.yml`.
+- **Docker provider** — owns any container with `traefik.enable=true`.
+
+The discoverer skips any container with a `traefik.*` label, so a given
+container is owned by exactly one provider. There is no double-routing.
+
+### Recommended convention: env-var-parameterized labels
+
+Use env vars for the values that differ between cloud and local:
+
+```yaml
+labels:
+  - "traefik.enable=true"
+  - "traefik.http.routers.foo.rule=Host(`${HOST}.${DOMAIN}`)"
+  - "traefik.http.routers.foo.entrypoints=websecure"
+  - "traefik.http.routers.foo.tls=true"
+  - "traefik.http.routers.foo.tls.options=${TLS_OPTIONS:-default@file}"
+  - "traefik.http.routers.foo.middlewares=security-headers,compression"
+  - "traefik.docker.network=${TRAEFIK_NETWORK:-dynomesh-net}"
+```
+
+Cloud `.env`:
+
+```
+DOMAIN=example.com
+TLS_OPTIONS=cloudflare@file
+TRAEFIK_NETWORK=traefik_network
+```
+
+Local `.env`:
+
+```
+DOMAIN=example.localhost
+# defaults for TLS_OPTIONS and TRAEFIK_NETWORK kick in
+```
+
+### Stable names you can rely on locally
+
+- Entrypoints: `web` (port 80) and `websecure` (port 443).
+- Default docker-provider network: `dynomesh-net`.
+- Shipped middlewares: `redirect-to-https`, `security-headers`,
+  `compression` (in `standard-middlewares.yml`).
+- Shipped TLS options: `default`, `cloudflare` (in `standard-tls.yml`).
+- Cert: a wildcard SAN covers `*.<compose-project>.<suffix>`. If your
+  compose project name contains dots (e.g. `demo.falconmode`), the SAN
+  follows: `*.demo.falconmode.localhost`.
+
+### Troubleshooting: labels look right but the host returns 404
+
+The most common cause is that your service isn't attached to
+`dynomesh-net`. Traefik's docker provider needs an IP on the
+provider-level network (or one named in `traefik.docker.network=`) to
+build a route — without one, it silently produces no route.
+
+Look in the discoverer logs for a line like:
+
+```
+WARN container=foo project=bar has traefik.* labels but is not attached
+to dynomesh-net. Traefik's docker provider will silently ignore it.
+Fix: add `dynomesh-net` to the service's networks list, or set label
+`traefik.docker.network=<your-network>`. Networks attached: [app-net]
+```
+
+Two ways to fix:
+
+```yaml
+# Option A — add dynomesh-net to the service
+services:
+  app:
+    networks: [app-net, dynomesh-net]
+
+networks:
+  dynomesh-net:
+    external: true
+```
+
+```yaml
+# Option B — point the docker provider at your existing network
+labels:
+  - "traefik.docker.network=app-net"
+```
+
+### Adding `forward-auth` (recipe)
+
+`forward-auth` isn't shipped because it requires a project-specific auth
+backend (Authelia, oauth2-proxy, your own SSO). Add it project-locally:
+
+1. Add the auth container to your compose file on `dynomesh-net`.
+2. Create `traefik/dynamic/<project>-auth.yml` defining a `forward-auth`
+   middleware that points at the auth container's URL.
+3. Reference it from your service labels:
+   `traefik.http.routers.foo.middlewares=forward-auth,security-headers`.
