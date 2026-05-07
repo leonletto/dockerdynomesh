@@ -61,11 +61,6 @@ const tmpl = `http:
       middlewares:
         - redirect-to-https
 {{- end }}
-  middlewares:
-    redirect-to-https:
-      redirectScheme:
-        scheme: https
-        permanent: true
   services:
 {{- range .Routers }}
     {{ .Name }}:

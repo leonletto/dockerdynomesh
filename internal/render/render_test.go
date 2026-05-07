@@ -29,12 +29,6 @@ func TestRenderSingleContainerLocalOnly(t *testing.T) {
 		"nginx-repo-http:",
 		"- web",
 		"- redirect-to-https",
-		// shared middleware
-		"middlewares:",
-		"redirect-to-https:",
-		"redirectScheme:",
-		"scheme: https",
-		"permanent: true",
 		"services:",
 		"loadBalancer:",
 		"url: http://172.20.0.5:80",
@@ -43,6 +37,12 @@ func TestRenderSingleContainerLocalOnly(t *testing.T) {
 		if !strings.Contains(yaml, w) {
 			t.Errorf("rendered YAML missing %q\n--- output ---\n%s", w, yaml)
 		}
+	}
+	if strings.Contains(yaml, "redirectScheme:") {
+		t.Fatalf("rendered auto.yml must not define redirect-to-https; lives in standard-middlewares.yml now\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "- redirect-to-https") {
+		t.Fatalf("HTTP routers must still reference redirect-to-https by name\n%s", yaml)
 	}
 }
 
@@ -173,7 +173,7 @@ func TestRenderEmptyContainersReturnsValidEmptyYAML(t *testing.T) {
 	}
 	// Traefik wants an empty http: section with both routers: and services:
 	// keys present, not a missing one. The template emits both unconditionally.
-	for _, want := range []string{"http:", "routers:", "middlewares:", "services:"} {
+	for _, want := range []string{"http:", "routers:", "services:"} {
 		if !strings.Contains(yaml, want) {
 			t.Errorf("expected %q in output\n%s", want, yaml)
 		}
@@ -278,14 +278,14 @@ func TestRenderRedirectMiddlewareExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// The middleware definition key should appear exactly once.
-	count := strings.Count(out, "redirect-to-https:\n")
-	if count != 1 {
-		t.Errorf("expected redirect-to-https middleware definition exactly once, got %d\n--- output ---\n%s", count, out)
+	// The middleware definition must NOT appear in rendered output;
+	// it lives in standard-middlewares.yml (shipped by T3).
+	if strings.Contains(out, "redirectScheme:") {
+		t.Fatalf("rendered auto.yml must not define redirect-to-https; lives in standard-middlewares.yml now\n%s", out)
 	}
-	// redirectScheme block should appear exactly once (it's the definition, not a reference).
-	schemeCount := strings.Count(out, "redirectScheme:")
-	if schemeCount != 1 {
-		t.Errorf("expected redirectScheme: exactly once, got %d\n--- output ---\n%s", schemeCount, out)
+	// Each service still references the middleware by name (3 services → 3 references).
+	refCount := strings.Count(out, "- redirect-to-https")
+	if refCount != 3 {
+		t.Errorf("expected 3 redirect-to-https references (one per service), got %d\n--- output ---\n%s", refCount, out)
 	}
 }
