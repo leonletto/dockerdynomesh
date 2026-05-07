@@ -24,9 +24,13 @@ That sidecar exposes only four API families on a private TCP socket on
 - `GET /networks/*` — network membership
 - `GET /info` — daemon info
 
-All other endpoints are denied by default. The discoverer connects to
-`tcp://socket-proxy:2375` via `DOCKER_HOST`. It never has a path to the host
-socket.
+All other endpoints are denied by default. Two consumers connect to
+`tcp://socket-proxy:2375`: the **discoverer** (via `DOCKER_HOST`) and
+**Traefik's docker provider** (via `providers.docker.endpoint` in
+`traefik.yml`). Neither container has a path to the host socket — Traefik
+in particular does not bind `/var/run/docker.sock`, which is the more common
+configuration in upstream Traefik examples and the configuration this project
+deliberately avoids.
 
 **Nonroot discoverer.** The discoverer container runs as distroless nonroot
 (UID 65532). Even if a bug in the discoverer allows arbitrary code execution,

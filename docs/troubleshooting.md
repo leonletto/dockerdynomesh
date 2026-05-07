@@ -140,6 +140,57 @@ labels:
 
 ---
 
+## Container with `traefik.*` labels returns 404
+
+**Symptom:** A container with `traefik.enable=true` and Traefik labels is up,
+but the configured hostname returns 404. Discoverer logs nothing surprising;
+the Traefik dashboard (if enabled) shows no router for the container.
+
+**Root cause (most common):** The container isn't on `dynomesh-net`. Traefik's
+docker provider needs an IP on the configured provider-level network (or one
+named in a `traefik.docker.network=` override label) to build a route — without
+one, it silently produces no route.
+
+**Diagnosis:** Check discoverer logs for the remediation warning:
+
+```bash
+docker compose logs discoverer | grep "not attached to dynomesh-net"
+```
+
+You'll see a line like:
+
+```
+WARN container=foo project=bar has traefik.* labels but is not attached
+to dynomesh-net. Traefik's docker provider will silently ignore it.
+Fix: add `dynomesh-net` to the service's networks list, or set label
+`traefik.docker.network=<your-network>`. Networks attached: [app-net]
+```
+
+**Fix (option A — recommended):** add `dynomesh-net` to the service:
+
+```yaml
+services:
+  app:
+    networks: [app-net, dynomesh-net]
+
+networks:
+  dynomesh-net:
+    external: true
+```
+
+**Fix (option B):** point the docker provider at your existing network via a
+per-container label:
+
+```yaml
+labels:
+  - "traefik.docker.network=app-net"
+```
+
+See [adding-to-projects.md → Reusing a cloud-style compose](adding-to-projects.md#reusing-a-cloud-style-compose)
+for the full label-driven workflow.
+
+---
+
 ## certgen socket healthcheck stuck
 
 **Symptom:** `docker compose ps` shows certgen as unhealthy or starting for

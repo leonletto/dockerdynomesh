@@ -106,9 +106,12 @@ more detail.
 
 ## Containers with existing Traefik labels
 
-If a container already has `traefik.*` labels (it's managed by Traefik's
-docker provider directly), discoverer skips it. The auto-generated router
-and the docker-provider router would conflict. Pick one or the other.
+If a container has any `traefik.*` label, discoverer skips it: Traefik's
+docker provider owns those routes directly. The two providers coexist by
+design — bare containers go through discoverer + the file provider; labeled
+containers go through the docker provider. There is no conflict because each
+container is owned by exactly one provider. See "Reusing a cloud-style
+compose" below for the full workflow.
 
 ## Reusing a cloud-style compose
 

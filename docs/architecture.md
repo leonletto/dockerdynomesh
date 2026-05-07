@@ -38,13 +38,25 @@ distroless nonroot (UID 65532).
 
 **traefik** terminates TLS and routes requests by `Host()` header. It reads
 static config from `traefik/traefik.yml` (bind mount) and dynamic config from
-the `traefik/dynamic/` directory via the file provider (file watcher, no
-polling). The `certs` volume provides `wildcard.crt` and `wildcard.key`. Three
-sources of dynamic config coexist: `auto.yml` (discoverer), `cert.yml`
-(committed, declares the TLS store), and `setup.yml` (bootstrap-generated,
-setup-page routers). Traefik binds `127.0.0.1:80` and `127.0.0.1:443` by
-default; when Tailscale is detected, bootstrap appends the Tailscale interface
-IP to the port bindings via `docker-compose.override.yml`.
+two providers running side-by-side:
+
+- The **file provider** watches `traefik/dynamic/` (file watcher, no polling)
+  and serves five inputs: `auto.yml` (discoverer-generated routes for bare
+  containers), `cert.yml` (committed, declares the TLS store),
+  `standard-middlewares.yml` (shipped: `redirect-to-https`,
+  `security-headers`, `compression`), `standard-tls.yml` (shipped: `default`
+  and `cloudflare` TLS option profiles), and `setup.yml` (bootstrap-generated,
+  setup-page routers).
+- The **docker provider** connects to `tcp://socket-proxy:2375` (the same
+  read-only proxy the discoverer uses) and routes any container that opts in
+  via `traefik.enable=true`. `exposedByDefault: false`, so bare containers
+  stay in the discoverer's lane. Discoverer skips any container with a
+  `traefik.*` label, so each container is owned by exactly one provider.
+
+The `certs` volume provides `wildcard.crt` and `wildcard.key`. Traefik binds
+`127.0.0.1:80` and `127.0.0.1:443` by default; when Tailscale is detected,
+bootstrap appends the Tailscale interface IP to the port bindings via
+`docker-compose.override.yml`.
 
 **welcome** serves a small HTTP page that delivers the root CA download and
 install instructions. It runs inside the compose network with no host-side
