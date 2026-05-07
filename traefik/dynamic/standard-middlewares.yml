@@ -1,0 +1,30 @@
+# Project-agnostic middlewares shipped with dockerdynomesh.
+# Cloud-style compose files reference these by name in
+# traefik.http.routers.<r>.middlewares=...; this file makes them
+# resolve locally without project authors having to define them.
+#
+# redirect-to-https: discoverer-generated HTTP routers reference this
+#   by name to send :80 traffic to :443. Definition lives here (single
+#   source of truth) so it isn't regenerated on every reconcile.
+# security-headers / compression: standard hardening + perf middleware
+#   common in cloud Traefik deploys.
+#
+# forward-auth is intentionally NOT shipped — it requires a project-
+# specific auth backend. See docs/adding-to-projects.md for the recipe.
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        frameDeny: true
+    compression:
+      compress: {}
