@@ -14,10 +14,12 @@ SERVICE=app
 CONTAINER=ddm-misconf-app
 PRIVATE_NET=ddm-misconf-net
 HOST="${SERVICE}.${PROJECT}.docker.localhost"
+ROOT_PEM=/tmp/dynomesh-root-misconfig.pem
 
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   docker network rm "$PRIVATE_NET" >/dev/null 2>&1 || true
+  rm -f "$ROOT_PEM"
 }
 trap cleanup EXIT
 
@@ -54,9 +56,17 @@ if (( matched == 0 )); then
   exit 1
 fi
 
-# Host should not respond (no route built). curl is expected to fail.
-if curl -sf --max-time 3 --resolve "${HOST}:443:127.0.0.1" -k "https://${HOST}/" >/dev/null; then
-  echo "FAIL: host responded but no route should exist"
+# Host should not be reachable (no route built). Use the project's root
+# CA so we exercise the real wildcard cert path — -k would silently
+# accept Traefik's default self-signed fallback. We expect a non-200
+# (404 from the default backend, or a connect failure if Traefik isn't
+# even serving the SNI). 200 means a route was unexpectedly built.
+docker compose cp certgen:/shared/ca/rootCA.pem "$ROOT_PEM" >/dev/null
+code=$(curl -s --max-time 3 --resolve "${HOST}:443:127.0.0.1" \
+            --cacert "$ROOT_PEM" -o /dev/null -w '%{http_code}' \
+            "https://${HOST}/" || true)
+if [ "$code" = "200" ]; then
+  echo "FAIL: host responded with 200 but no route should exist"
   exit 1
 fi
 
