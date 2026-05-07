@@ -117,3 +117,20 @@ func TestSANsMultipleSuffixesWithTailnet(t *testing.T) {
 		t.Fatalf("SANs mismatch:\n got=%v\nwant=%v", got, want)
 	}
 }
+
+func TestSANs_DottedProjectName(t *testing.T) {
+	got := SANs(
+		[]string{"localhost"},
+		"host-mbp", "tail0123.ts.net",
+		[]string{"demo.falconmode"},
+	)
+	want := []string{
+		"*.demo.falconmode.host-mbp.tail0123.ts.net",
+		"*.demo.falconmode.localhost",
+		"*.host-mbp.tail0123.ts.net",
+		"*.localhost",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SANs mismatch\n got: %v\nwant: %v", got, want)
+	}
+}
