@@ -169,6 +169,96 @@ func TestFromContainerLowercasesComposeHostname(t *testing.T) {
 	}
 }
 
+func TestLabeledMissingNetwork(t *testing.T) {
+	mk := func(labels map[string]string, networks ...string) container.InspectResponse {
+		nets := map[string]*network.EndpointSettings{}
+		for _, n := range networks {
+			nets[n] = &network.EndpointSettings{IPAddress: "10.0.0.2"}
+		}
+		return container.InspectResponse{
+			ContainerJSONBase: &container.ContainerJSONBase{Name: "/test", ID: "abc123"},
+			Config:            &container.Config{Labels: labels},
+			NetworkSettings:   &container.NetworkSettings{Networks: nets},
+		}
+	}
+
+	cases := []struct {
+		name           string
+		c              container.InspectResponse
+		want           bool
+		wantAttachedAt int // len of attached
+	}{
+		{
+			name:           "no traefik labels — not flagged",
+			c:              mk(map[string]string{}, "app-net"),
+			want:           false,
+			wantAttachedAt: 0,
+		},
+		{
+			name:           "labeled and on dynomesh-net — not flagged",
+			c:              mk(map[string]string{"traefik.enable": "true"}, "dynomesh-net"),
+			want:           false,
+			wantAttachedAt: 0,
+		},
+		{
+			name:           "labeled but only on app-net — flagged",
+			c:              mk(map[string]string{"traefik.enable": "true"}, "app-net"),
+			want:           true,
+			wantAttachedAt: 1,
+		},
+		{
+			name: "labeled with traefik.docker.network override pointing at attached net — not flagged",
+			c: mk(map[string]string{
+				"traefik.enable":         "true",
+				"traefik.docker.network": "app-net",
+			}, "app-net"),
+			want:           false,
+			wantAttachedAt: 0,
+		},
+		{
+			name: "labeled with traefik.docker.network override pointing at unattached net — flagged",
+			c: mk(map[string]string{
+				"traefik.enable":         "true",
+				"traefik.docker.network": "some-other-net",
+			}, "app-net"),
+			want:           true,
+			wantAttachedAt: 1,
+		},
+		{
+			name: "nil Config — not flagged",
+			c: container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{Name: "/test", ID: "abc123"},
+				Config:            nil,
+				NetworkSettings:   &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{"app-net": {IPAddress: "10.0.0.2"}}},
+			},
+			want:           false,
+			wantAttachedAt: 0,
+		},
+		{
+			name: "nil NetworkSettings — not flagged",
+			c: container.InspectResponse{
+				ContainerJSONBase: &container.ContainerJSONBase{Name: "/test", ID: "abc123"},
+				Config:            &container.Config{Labels: map[string]string{"traefik.enable": "true"}},
+				NetworkSettings:   nil,
+			},
+			want:           false,
+			wantAttachedAt: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			attached, got := LabeledMissingNetwork(tc.c, "dynomesh-net")
+			if got != tc.want {
+				t.Fatalf("misconfigured=%v want %v (attached=%v)", got, tc.want, attached)
+			}
+			if got && len(attached) != tc.wantAttachedAt {
+				t.Fatalf("attached len=%d want %d (attached=%v)", len(attached), tc.wantAttachedAt, attached)
+			}
+		})
+	}
+}
+
 func TestProjectsOfDeduplicatesAndSorts(t *testing.T) {
 	cs := []container.InspectResponse{
 		makeContainer("a", map[string]string{"com.docker.compose.project": "zeta"}, nil, nil),
