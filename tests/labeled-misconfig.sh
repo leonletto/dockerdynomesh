@@ -40,7 +40,9 @@ docker run -d --rm --name "$CONTAINER" --network "$PRIVATE_NET" \
 deadline=$((SECONDS + 15))
 matched=0
 while (( SECONDS < deadline )); do
-  if docker compose logs discoverer 2>&1 | grep -q "container=${CONTAINER}.*not attached to dynomesh-net"; then
+  if docker compose logs discoverer 2>&1 \
+       | grep "container=${CONTAINER}\b" \
+       | grep -q "not attached to dynomesh-net\. Traefik"; then
     matched=1
     break
   fi

@@ -30,6 +30,8 @@ func TestSANsWithTailnet(t *testing.T) {
 	}
 }
 
+// Locks AC #4: dotted project names (e.g. "demo.falconmode") preserve the dot
+// in every emitted SAN.
 func TestSANsCustomDomainProject(t *testing.T) {
 	got := SANs([]string{"localhost"}, "host-mbp", "tail0123.ts.net", []string{"demo.falconmode"})
 	want := []string{
@@ -118,19 +120,3 @@ func TestSANsMultipleSuffixesWithTailnet(t *testing.T) {
 	}
 }
 
-func TestSANs_DottedProjectName(t *testing.T) {
-	got := SANs(
-		[]string{"localhost"},
-		"host-mbp", "tail0123.ts.net",
-		[]string{"demo.falconmode"},
-	)
-	want := []string{
-		"*.demo.falconmode.host-mbp.tail0123.ts.net",
-		"*.demo.falconmode.localhost",
-		"*.host-mbp.tail0123.ts.net",
-		"*.localhost",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("SANs mismatch\n got: %v\nwant: %v", got, want)
-	}
-}
