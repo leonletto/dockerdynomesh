@@ -200,11 +200,13 @@ takeover_setup() {
   export TAKEOVER_ADDRESS_FLAGS="$flags"
 
   # Persist back to .env so docker compose's variable interpolation sees it.
+  # Quote the value: $flags contains spaces, and load_env sources .env via
+  # `set -a; . ./.env`, which splits on whitespace for unquoted values.
   if grep -q '^TAKEOVER_ADDRESS_FLAGS=' .env 2>/dev/null; then
-    sed -i.bak "s|^TAKEOVER_ADDRESS_FLAGS=.*|TAKEOVER_ADDRESS_FLAGS=$flags|" .env
+    sed -i.bak "s|^TAKEOVER_ADDRESS_FLAGS=.*|TAKEOVER_ADDRESS_FLAGS=\"$flags\"|" .env
     rm -f .env.bak
   else
-    printf 'TAKEOVER_ADDRESS_FLAGS=%s\n' "$flags" >> .env
+    printf 'TAKEOVER_ADDRESS_FLAGS="%s"\n' "$flags" >> .env
   fi
 
   # Generate dnsmasq.conf for the mounted-conf mechanism. The dockurr/dnsmasq
