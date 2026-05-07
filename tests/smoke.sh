@@ -11,10 +11,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
+# Pick up an operator-customized SUFFIX from .env if one exists. We
+# intentionally do NOT source .env wholesale (it may contain multi-word
+# values like TAKEOVER_ADDRESS_FLAGS that don't survive `set -a; . .env`
+# in older bootstrap-written files); just extract the SUFFIX line. The
+# discoverer always emits routes for the primary SUFFIX, so this is
+# enough to make smoke pass against any local config.
+SUFFIX="${SUFFIX:-docker.localhost}"
+if [ -f .env ]; then
+  env_suffix=$(grep -E '^SUFFIX=' .env | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+  [ -n "$env_suffix" ] && SUFFIX="$env_suffix"
+fi
+
 PROJECT=smoke
 SERVICE=nginx
 CONTAINER=ddm-smoke-nginx
-HOST="${SERVICE}.${PROJECT}.docker.localhost"
+HOST="${SERVICE}.${PROJECT}.${SUFFIX}"
 ROOT_PEM=/tmp/dynomesh-root-smoke.pem
 
 # shellcheck disable=SC2329 # invoked via the trap below
@@ -64,7 +76,7 @@ done
 REISSUE_PROJECT=smoke-reissue
 REISSUE_SERVICE=nginx
 REISSUE_CONTAINER=ddm-smoke-reissue-nginx
-REISSUE_HOST="${REISSUE_SERVICE}.${REISSUE_PROJECT}.docker.localhost"
+REISSUE_HOST="${REISSUE_SERVICE}.${REISSUE_PROJECT}.${SUFFIX}"
 
 docker rm -f "$REISSUE_CONTAINER" >/dev/null 2>&1 || true
 
