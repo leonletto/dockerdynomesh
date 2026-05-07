@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -314,5 +317,38 @@ func TestBootReconcileRespectsCtxCancellation(t *testing.T) {
 	// Should have stopped well before maxAttempts.
 	if got := int(calls.Load()); got >= maxAttempts {
 		t.Errorf("calls = %d; ctx cancellation did not break loop", got)
+	}
+}
+
+func TestReconciler_LogsLabeledMisconfigurationOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	r := &reconciler{
+		loggedMisconfig: map[string]string{},
+	}
+	c := container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{ID: "deadbeefcafe", Name: "/falcon-demo-nginx"},
+		Config: &container.Config{Labels: map[string]string{
+			"traefik.enable":             "true",
+			"com.docker.compose.project": "demo.falconmode",
+		}},
+		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
+			"app-net": {IPAddress: "10.0.0.2"},
+		}},
+	}
+
+	r.logMisconfigIfNeeded(c, "dynomesh-net")
+	r.logMisconfigIfNeeded(c, "dynomesh-net") // second call: must NOT re-log
+
+	out := buf.String()
+	if strings.Count(out, "not attached to dynomesh-net") != 1 {
+		t.Fatalf("expected exactly one warning; got:\n%s", out)
+	}
+	for _, want := range []string{"falcon-demo-nginx", "demo.falconmode", "app-net", "traefik.docker.network"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("warning missing %q\n%s", want, out)
+		}
 	}
 }

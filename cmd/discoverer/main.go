@@ -51,16 +51,17 @@ func main() {
 	networkName := envOr("NETWORK_NAME", inspect.DefaultNetworkName)
 
 	r := &reconciler{
-		docker:   dc,
-		certgen:  cg,
-		render:   func(cfg render.Config) (string, error) { return render.Render(cfg) },
-		writeOut: atomicWrite,
-		out:      *dynamicPath,
-		suffixes: suffixes,
-		machine:  *machine,
-		tailnet:  *tailnet,
-		network:  networkName,
-		debounce: time.Duration(*debounceMS) * time.Millisecond,
+		docker:          dc,
+		certgen:         cg,
+		render:          func(cfg render.Config) (string, error) { return render.Render(cfg) },
+		writeOut:        atomicWrite,
+		out:             *dynamicPath,
+		suffixes:        suffixes,
+		machine:         *machine,
+		tailnet:         *tailnet,
+		network:         networkName,
+		debounce:        time.Duration(*debounceMS) * time.Millisecond,
+		loggedMisconfig: map[string]string{},
 	}
 
 	// Startup banner — one line with the resolved config so operators
@@ -135,6 +136,12 @@ type reconciler struct {
 	// reconcileFn is called by bootReconcile. Nil means use r.reconcile.
 	// Tests inject a stub here to drive the retry loop without docker.
 	reconcileFn func(ctx context.Context) error
+	// loggedMisconfig tracks per-container fingerprints of attached
+	// network sets we've already warned about, so we don't spam on every
+	// docker event for the same container. Keyed by container ID; value
+	// is the joined sorted network names. A change in the set triggers a
+	// fresh log line on the next reconcile.
+	loggedMisconfig map[string]string
 }
 
 // parseTakeoverSuffixes returns the full ordered suffix list (sorted, deduped)

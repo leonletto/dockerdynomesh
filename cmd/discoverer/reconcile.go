@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -162,6 +163,7 @@ func (r *reconciler) reconcileWith(ctx context.Context, containers []container.I
 		network = inspect.DefaultNetworkName
 	}
 	for _, c := range containers {
+		r.logMisconfigIfNeeded(c, network)
 		host, addr, ok, err := inspect.FromContainer(c, network)
 		if err != nil {
 			id := c.ID
@@ -189,6 +191,38 @@ func (r *reconciler) reconcileWith(ctx context.Context, containers []container.I
 	}
 	r.lastProjects = projects
 	return nil
+}
+
+// logMisconfigIfNeeded emits a remediation warning the first time it
+// sees a labeled container missing the target network, and again only
+// when the container's attached-network set changes.
+func (r *reconciler) logMisconfigIfNeeded(c container.InspectResponse, network string) {
+	attached, bad := inspect.LabeledMissingNetwork(c, network)
+	id := c.ID
+	if !bad {
+		// Recovered (or never was bad): forget any prior fingerprint
+		// so a future regression re-logs.
+		delete(r.loggedMisconfig, id)
+		return
+	}
+	fingerprint := strings.Join(attached, ",")
+	if r.loggedMisconfig[id] == fingerprint {
+		return
+	}
+	// State mutation MUST come AFTER the side effect (log call).
+	name := strings.TrimPrefix(c.Name, "/")
+	project := ""
+	if c.Config != nil {
+		project = c.Config.Labels["com.docker.compose.project"]
+	}
+	log.Printf(
+		"WARN container=%s project=%s has traefik.* labels but is not attached to %s. "+
+			"Traefik's docker provider will silently ignore it. "+
+			"Fix: add `%s` to the service's networks list, or set label "+
+			"`traefik.docker.network=<your-network>`. Networks attached: %v",
+		name, project, network, network, attached,
+	)
+	r.loggedMisconfig[id] = fingerprint
 }
 
 func (r *reconciler) listEligible(ctx context.Context) ([]container.InspectResponse, error) {
