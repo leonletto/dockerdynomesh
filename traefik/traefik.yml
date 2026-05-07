@@ -25,6 +25,19 @@ providers:
   file:
     directory: /shared/dynamic
     watch: true
+  docker:
+    # Reuses the same read-only socket-proxy the discoverer uses; no
+    # docker socket is bound into the Traefik container itself.
+    endpoint: tcp://socket-proxy:2375
+    # Only containers that opt in via `traefik.enable=true` are routed.
+    # The discoverer continues to handle bare containers via the file
+    # provider; it skips any container with a traefik.* label, so the
+    # two providers stay in their own lanes by construction.
+    exposedByDefault: false
+    # Default network the docker provider uses to pick a container IP.
+    # Containers can override per-router with traefik.docker.network=...
+    network: dynomesh-net
+    watch: true
 
 log:
   level: INFO

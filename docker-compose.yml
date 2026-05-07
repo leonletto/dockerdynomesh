@@ -122,6 +122,8 @@ services:
         condition: service_healthy
       discoverer:
         condition: service_started
+      socket-proxy:
+        condition: service_started
     restart: unless-stopped
 
   welcome:
