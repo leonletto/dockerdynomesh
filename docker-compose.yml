@@ -103,7 +103,7 @@ services:
     restart: unless-stopped
 
   traefik:
-    image: traefik:v3.1.7
+    image: traefik:v3.7.0
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     volumes:
