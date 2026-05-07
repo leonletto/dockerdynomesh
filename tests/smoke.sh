@@ -95,9 +95,21 @@ if [ $reissue_routed -eq 0 ]; then
   exit 1
 fi
 
-# Fingerprint after reissue.
-fp_after=$(echo | openssl s_client -connect 127.0.0.1:443 \
-  -servername "$HOST" 2>/dev/null | openssl x509 -noout -fingerprint -sha1 2>/dev/null || true)
+# Fingerprint after reissue. certgen reissue happens immediately on
+# discoverer reconcile, but Traefik's cert reload after the underlying
+# file changes is not instantaneous — bumped from v3.1.7 to v3.7.0
+# made the latency visible. Match the same 30s window already used for
+# auto.yml propagation above.
+fp_after=""
+fp_deadline=$((SECONDS + 30))
+while [ $SECONDS -lt $fp_deadline ]; do
+  fp_after=$(echo | openssl s_client -connect 127.0.0.1:443 \
+    -servername "$HOST" 2>/dev/null | openssl x509 -noout -fingerprint -sha1 2>/dev/null || true)
+  if [ -n "$fp_after" ] && [ "$fp_before" != "$fp_after" ]; then
+    break
+  fi
+  sleep 1
+done
 
 docker rm -f "$REISSUE_CONTAINER" >/dev/null 2>&1 || true
 
