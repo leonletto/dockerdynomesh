@@ -8,7 +8,12 @@ networks:
 volumes:
   certs:
   run:
+  # ca is declared external so `docker compose down -v` can never wipe the
+  # non-regenerable root CA. certs/run stay managed (regenerable). bootstrap.sh
+  # creates this volume idempotently before `up` (external vols must pre-exist).
   ca:
+    external: true
+    name: dockerdynomesh_ca
 
 services:
   certgen:

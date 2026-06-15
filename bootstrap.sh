@@ -468,6 +468,11 @@ main() {
   takeover_setup
   docker network inspect dynomesh-net >/dev/null 2>&1 || \
     docker network create dynomesh-net
+  # The ca volume is declared external (see docker-compose.yml) so `down -v`
+  # can never wipe the root CA. External volumes must pre-exist — create it
+  # idempotently here, mirroring the dynomesh-net pattern above.
+  docker volume inspect dockerdynomesh_ca >/dev/null 2>&1 || \
+    docker volume create dockerdynomesh_ca
   local profile_args=()
   if [ -n "${TAKEOVER_SUFFIXES:-}" ]; then
     profile_args+=(--profile takeover)
@@ -495,6 +500,16 @@ main() {
   done
   if [ -f ./root-ca.pem ]; then
     report_ca_trust
+    # Defense-in-depth: snapshot the root CA (cert + key) outside the repo on
+    # every up, so even a forced `docker volume rm` is recoverable. The
+    # external-volume declaration already blocks `down -v`; this covers the
+    # harder wipe. Written under $HOME so private keys never land in the repo.
+    ca_backup_dir="${HOME}/.dockerdynomesh-backups/ca"
+    mkdir -p "$ca_backup_dir"
+    if docker run --rm -v dockerdynomesh_ca:/src:ro -v "$ca_backup_dir":/backup \
+        alpine tar czf /backup/rootCA-latest.tgz -C /src . 2>/dev/null; then
+      printf 'Root CA backed up to %s/rootCA-latest.tgz\n' "$ca_backup_dir"
+    fi
   else
     # shellcheck disable=SC2016 # backticks are intentional copy-paste literal
     printf 'Warning: did not see root cert after 60s; check `docker compose logs certgen`.\n' >&2
