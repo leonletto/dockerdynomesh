@@ -209,6 +209,26 @@ takeover_setup() {
     printf 'TAKEOVER_ADDRESS_FLAGS="%s"\n' "$flags" >> .env
   fi
 
+  # DNS-only tailnet entry: resolve this machine's OWN tailnet subdomain to
+  # loopback so setup.<machine>.<tailnet> and <svc>.<proj>.<machine>.<tailnet>
+  # are reachable on THIS host. Scoped to <machine>.<tailnet> (never the whole
+  # tailnet) so peer names keep resolving via Tailscale MagicDNS — a 4-label
+  # /etc/resolver entry out-specifies Tailscale's 3-label scutil resolver.
+  # These get dnsmasq address rules + a resolver file but are NOT added to
+  # TAKEOVER_SUFFIXES: the discoverer already issues the *.<machine>.<tailnet>
+  # cert SAN and routers, so listing it as a routing suffix would duplicate
+  # them. Rides the takeover/dnsmasq sidecar, so it is active whenever
+  # TAKEOVER_SUFFIXES is non-empty.
+  local dns_only=""
+  if [ -n "$MACHINE_NAME" ] && [ -n "$TAILNET_DOMAIN" ]; then
+    if valid_suffix "$MACHINE_NAME.$TAILNET_DOMAIN"; then
+      dns_only="$MACHINE_NAME.$TAILNET_DOMAIN"
+    else
+      printf 'WARNING: skipping tailnet DNS entry — invalid suffix %s.%s\n' \
+        "$MACHINE_NAME" "$TAILNET_DOMAIN" >&2
+    fi
+  fi
+
   # Generate dnsmasq.conf for the mounted-conf mechanism. The dockurr/dnsmasq
   # image entrypoint ignores CLI args but honors /etc/dnsmasq.conf when
   # mounted. This file is mounted read-only by docker-compose.yml.
@@ -219,7 +239,7 @@ takeover_setup() {
     printf 'bind-interfaces\n'
     printf 'listen-address=0.0.0.0\n'
     printf 'port=53\n'
-    for s in $cleaned; do
+    for s in $cleaned $dns_only; do
       printf 'address=/%s/127.0.0.1\n' "$s"
     done
   } > dnsmasq.conf
@@ -247,7 +267,7 @@ takeover_setup() {
   # overwriting; YES=1 skips prompts (for CI / scripts).
   local desired path current ans
   desired=$(printf 'nameserver 127.0.0.1\nport %s\n' "$TAKEOVER_DNS_PORT")
-  for s in $cleaned; do
+  for s in $cleaned $dns_only; do
     path="/etc/resolver/$s"
     if [ -f "$path" ]; then
       current=$(cat "$path")
@@ -315,10 +335,17 @@ write_setup_router() {
 #
 # Routing matrix:
 #
-#  :80  setup.<m>.<t>  or  <m>.<t>            → welcome (HTTP, no warning)
-#  :443 setup.<m>.<t>  or  <m>.<t>            → welcome (HTTPS, warns until trust)
-#  :80  any other host (bare IP, typo, etc.)  → 301 → http://setup.<m>.<t>/
-#  :443 any other host                        → 301 → http://setup.<m>.<t>/
+#  :80  setup.<suffix> / setup.<m>.<t> / <m>.<t>  → welcome (HTTP, no warning)
+#  :443 setup.<suffix> / setup.<m>.<t> / <m>.<t>  → welcome (HTTPS, warns until trust)
+#  :80  any other host (bare IP, typo, etc.)      → 301 → http://setup.<suffix>/
+#  :443 any other host                            → 301 → http://setup.<suffix>/
+#
+# The redirect target is the LOCAL setup host (setup.<suffix>, e.g.
+# setup.docker.localhost): it resolves to loopback on every OS (RFC 6761)
+# and is covered by the *.<suffix> cert SAN, so it's reachable with a valid
+# cert with no DNS setup. The tailnet hostnames are also matched (for remote
+# access) but are NOT used as the redirect target — setup.<machine>.<tailnet>
+# is not resolvable under default MagicDNS. See BUGREPORT Bug 3.
 #
 # Service routers (containers exposed via discoverer) attach to entrypoint
 # 'websecure' only with explicit Host() rules — they outrank the
@@ -327,12 +354,12 @@ http:
   routers:
     setup-http:
       entryPoints: [web]
-      rule: "Host(\`setup.$MACHINE_NAME.$TAILNET_DOMAIN\`) || Host(\`$MACHINE_NAME.$TAILNET_DOMAIN\`)"
+      rule: "Host(\`setup.${SUFFIX:-docker.localhost}\`) || Host(\`setup.$MACHINE_NAME.$TAILNET_DOMAIN\`) || Host(\`$MACHINE_NAME.$TAILNET_DOMAIN\`)"
       service: welcome
       priority: 100
     setup-https:
       entryPoints: [websecure]
-      rule: "Host(\`setup.$MACHINE_NAME.$TAILNET_DOMAIN\`) || Host(\`$MACHINE_NAME.$TAILNET_DOMAIN\`)"
+      rule: "Host(\`setup.${SUFFIX:-docker.localhost}\`) || Host(\`setup.$MACHINE_NAME.$TAILNET_DOMAIN\`) || Host(\`$MACHINE_NAME.$TAILNET_DOMAIN\`)"
       service: welcome
       tls: {}
       priority: 100
@@ -353,7 +380,7 @@ http:
     redirect-to-setup:
       redirectRegex:
         regex: "^.*$"
-        replacement: "http://setup.$MACHINE_NAME.$TAILNET_DOMAIN/"
+        replacement: "http://setup.${SUFFIX:-docker.localhost}/"
         permanent: true
   services:
     welcome:
@@ -398,7 +425,14 @@ teardown_takeover() {
   cleaned=$(printf '%s' "$cleaned" | sort -u | tr '\n' ' ')
   cleaned=${cleaned% }
 
-  for s in $cleaned; do
+  # Mirror takeover_setup: also remove the DNS-only tailnet resolver file.
+  local dns_only=""
+  if [ -n "$MACHINE_NAME" ] && [ -n "$TAILNET_DOMAIN" ] && \
+     valid_suffix "$MACHINE_NAME.$TAILNET_DOMAIN"; then
+    dns_only="$MACHINE_NAME.$TAILNET_DOMAIN"
+  fi
+
+  for s in $cleaned $dns_only; do
     path="/etc/resolver/$s"
     if [ ! -f "$path" ]; then
       printf '==> not present: %s\n' "$path"
@@ -477,7 +511,9 @@ main() {
   if [ -n "${TAKEOVER_SUFFIXES:-}" ]; then
     profile_args+=(--profile takeover)
   fi
-  docker compose "${profile_args[@]}" up -d --build
+  # bash 3.2 (macOS default) errors under `set -u` when expanding an empty
+  # array as "${arr[@]}". The ${arr[@]+...} guard makes it expand to nothing.
+  docker compose ${profile_args[@]+"${profile_args[@]}"} up -d --build
   printf 'Waiting for certgen to produce root cert...\n'
   for _ in $(seq 1 60); do
     if docker compose exec -T certgen test -f /shared/ca/rootCA.pem 2>/dev/null; then
