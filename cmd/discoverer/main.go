@@ -142,6 +142,14 @@ type reconciler struct {
 	// is the joined sorted network names. A change in the set triggers a
 	// fresh log line on the next reconcile.
 	loggedMisconfig map[string]string
+	// loggedInvalidProject tracks compose-project names we've already warned
+	// about for failing hostname-label validation, so a malformed project
+	// doesn't re-log on every reconcile. Lazily initialized in meshProjects.
+	loggedInvalidProject map[string]bool
+	// loggedInvalidHostname is the route-side counterpart to
+	// loggedInvalidProject: container hostnames already warned about for
+	// failing label validation. Lazily initialized in reconcileWith.
+	loggedInvalidHostname map[string]bool
 }
 
 // parseTakeoverSuffixes returns the full ordered suffix list (sorted, deduped)

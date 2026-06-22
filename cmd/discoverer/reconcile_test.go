@@ -117,6 +117,61 @@ func TestReconcileReissuesOnProjectSetChange(t *testing.T) {
 	}
 }
 
+// makeContainerOnNetwork builds a container attached to an arbitrary
+// network (makeContainer always uses the mesh network).
+func makeContainerOnNetwork(name, project, service, netName, ip string) container.InspectResponse {
+	c := makeContainer(name, project, service, ip)
+	c.NetworkSettings.Networks = map[string]*network.EndpointSettings{
+		netName: {IPAddress: ip},
+	}
+	return c
+}
+
+func TestReconcileScopesProjectSetToMeshNetwork(t *testing.T) {
+	rs := &fakeReissuer{}
+	wc := &writeCapture{}
+	r := newReconciler(rs, wc.write)
+
+	// "repo" is on the mesh; "elsewhere" runs on the host but is NOT joined
+	// to the mesh network — it must not appear in the cert project set.
+	cs := []container.InspectResponse{
+		makeContainer("repo-nginx-1", "repo", "nginx", "172.20.0.5"),
+		makeContainerOnNetwork("other-web-1", "elsewhere", "web", "bridge", "172.30.0.9"),
+	}
+	if err := r.reconcileWith(context.Background(), cs); err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.calls) != 1 {
+		t.Fatalf("reissue calls = %d; want 1", len(rs.calls))
+	}
+	if got := rs.calls[0].Projects; len(got) != 1 || got[0] != "repo" {
+		t.Errorf("projects = %v; want [repo] (off-mesh project must be excluded)", got)
+	}
+}
+
+func TestReconcileSkipsInvalidProjectLabel(t *testing.T) {
+	rs := &fakeReissuer{}
+	wc := &writeCapture{}
+	r := newReconciler(rs, wc.write)
+
+	// A mesh project whose name is not a valid hostname label (underscores)
+	// must be skipped, not fail the whole reissue. The valid project still
+	// gets its cert.
+	cs := []container.InspectResponse{
+		makeContainer("repo-nginx-1", "repo", "nginx", "172.20.0.5"),
+		makeContainer("bad-web-1", "omnissa_libre_chat", "web", "172.20.0.6"),
+	}
+	if err := r.reconcileWith(context.Background(), cs); err != nil {
+		t.Fatalf("reconcile should not fail on an invalid project label: %v", err)
+	}
+	if len(rs.calls) != 1 {
+		t.Fatalf("reissue calls = %d; want 1", len(rs.calls))
+	}
+	if got := rs.calls[0].Projects; len(got) != 1 || got[0] != "repo" {
+		t.Errorf("projects = %v; want [repo] (invalid label must be skipped)", got)
+	}
+}
+
 func TestReconcileSkipsReissueOnUnchangedProjects(t *testing.T) {
 	rs := &fakeReissuer{}
 	wc := &writeCapture{}

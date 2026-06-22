@@ -127,8 +127,19 @@ func (r *reconciler) reconcile(ctx context.Context) error {
 // (and wait for it to succeed) before writing the new auto.yml. If we
 // wrote first, Traefik would route a hostname the cert has no SAN for.
 func (r *reconciler) reconcileWith(ctx context.Context, containers []container.InspectResponse) error {
-	// Determine project set; reissue cert if changed.
-	projects := inspect.ProjectsOf(containers)
+	network := r.network
+	if network == "" {
+		network = inspect.DefaultNetworkName
+	}
+
+	// Determine project set; reissue cert if changed. The set is computed
+	// from containers ON THE MESH NETWORK only — routes are already scoped
+	// the same way (see inspect.FromContainer), and the two must agree.
+	// Including every compose project on the host would leak unrelated
+	// project names into the cert's SANs, and a single project whose name
+	// isn't a valid hostname label (e.g. contains underscores) would 400
+	// the entire reissue, breaking TLS for every mesh hostname.
+	projects := r.meshProjects(containers, network)
 	if !reflect.DeepEqual(projects, r.lastProjects) {
 		req := certgen.ReissueRequest{
 			Suffixes:      r.suffixes,
@@ -158,10 +169,6 @@ func (r *reconciler) reconcileWith(ctx context.Context, containers []container.I
 		MachineName:   r.machine,
 		TailnetDomain: r.tailnet,
 	}
-	network := r.network
-	if network == "" {
-		network = inspect.DefaultNetworkName
-	}
 	for _, c := range containers {
 		r.logMisconfigIfNeeded(c, network)
 		host, addr, ok, err := inspect.FromContainer(c, network)
@@ -174,6 +181,22 @@ func (r *reconciler) reconcileWith(ctx context.Context, containers []container.I
 			continue
 		}
 		if !ok {
+			continue
+		}
+		// Skip hostnames that aren't valid labels rather than letting render
+		// reject the whole batch (docs/hostname-rules.md: "skipped — no
+		// router is generated, and a log line explains why"). render keeps
+		// its own validation as defense-in-depth; this is the primary skip.
+		if !certgen.ValidateLabel(host) {
+			if r.loggedInvalidHostname == nil {
+				r.loggedInvalidHostname = map[string]bool{}
+			}
+			if !r.loggedInvalidHostname[host] {
+				log.Printf("skip: container hostname %q is not a valid label "+
+					"(must match [a-z0-9][a-z0-9.-]*, no underscores); no router "+
+					"generated. Rename the container/compose project to a valid label.", host)
+				r.loggedInvalidHostname[host] = true
+			}
 			continue
 		}
 		cfg.Containers = append(cfg.Containers, render.Container{
@@ -191,6 +214,42 @@ func (r *reconciler) reconcileWith(ctx context.Context, containers []container.I
 	}
 	r.lastProjects = projects
 	return nil
+}
+
+// meshProjects returns the cert project set for containers attached to the
+// given network: distinct, sorted, and restricted to names that are valid
+// hostname labels. A project whose name is not a valid label (e.g. it
+// contains underscores) is skipped with a one-time log line rather than
+// failing the whole reissue — matching the documented "invalid project →
+// skipped, logged" contract (docs/hostname-rules.md). Skipping degrades
+// gracefully: that project's services go unserved, but every other
+// project's cert still issues.
+func (r *reconciler) meshProjects(containers []container.InspectResponse, network string) []string {
+	mesh := make([]container.InspectResponse, 0, len(containers))
+	for _, c := range containers {
+		if inspect.OnNetwork(c, network) {
+			mesh = append(mesh, c)
+		}
+	}
+	all := inspect.ProjectsOf(mesh)
+	out := all[:0]
+	for _, p := range all {
+		if certgen.ValidateLabel(p) {
+			out = append(out, p)
+			continue
+		}
+		if r.loggedInvalidProject == nil {
+			r.loggedInvalidProject = map[string]bool{}
+		}
+		if !r.loggedInvalidProject[p] {
+			log.Printf("skip: compose project %q is not a valid hostname label "+
+				"(must match [a-z0-9][a-z0-9.-]*, no underscores); its services "+
+				"will not receive a mesh cert SAN. Set COMPOSE_PROJECT_NAME to a "+
+				"valid label to serve it.", p)
+			r.loggedInvalidProject[p] = true
+		}
+	}
+	return out
 }
 
 // logMisconfigIfNeeded emits a remediation warning the first time it

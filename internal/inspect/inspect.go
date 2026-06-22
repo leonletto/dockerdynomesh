@@ -62,6 +62,15 @@ func FromContainer(c container.InspectResponse, network string) (hostname, addre
 	return hostname, fmt.Sprintf("%s:%d", ip, port), true, nil
 }
 
+// OnNetwork reports whether c is attached to (has an IP on) the named
+// Docker network. Used to scope the cert project set to mesh members,
+// mirroring the per-container route filtering in FromContainer — the two
+// must agree, or a project with no container on the mesh leaks into the
+// cert's SAN list.
+func OnNetwork(c container.InspectResponse, network string) bool {
+	return networkIP(c, network) != ""
+}
+
 func networkIP(c container.InspectResponse, network string) string {
 	if c.NetworkSettings == nil {
 		return ""
