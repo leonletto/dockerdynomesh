@@ -259,6 +259,28 @@ func TestLabeledMissingNetwork(t *testing.T) {
 	}
 }
 
+func TestOnNetwork(t *testing.T) {
+	on := makeContainer("a", nil, map[string]*network.EndpointSettings{
+		"dynomesh-net": {IPAddress: "172.20.0.5"},
+	}, nil)
+	if !OnNetwork(on, "dynomesh-net") {
+		t.Errorf("OnNetwork = false; want true for attached container")
+	}
+	off := makeContainer("b", nil, map[string]*network.EndpointSettings{
+		"other_default": {IPAddress: "172.30.0.9"},
+	}, nil)
+	if OnNetwork(off, "dynomesh-net") {
+		t.Errorf("OnNetwork = true; want false for unattached container")
+	}
+	// Attached entry present but with no IP (partial state) → not on network.
+	noIP := makeContainer("c", nil, map[string]*network.EndpointSettings{
+		"dynomesh-net": {IPAddress: ""},
+	}, nil)
+	if OnNetwork(noIP, "dynomesh-net") {
+		t.Errorf("OnNetwork = true; want false when endpoint has no IP")
+	}
+}
+
 func TestProjectsOfDeduplicatesAndSorts(t *testing.T) {
 	cs := []container.InspectResponse{
 		makeContainer("a", map[string]string{"com.docker.compose.project": "zeta"}, nil, nil),
